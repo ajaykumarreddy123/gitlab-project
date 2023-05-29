@@ -1,0 +1,131 @@
+include:
+  template: Jobs/SAST.gitlab-ci.yml
+
+workflow:
+  rules: 
+    - if: $CI_COMMIT_BRANCH != "main" && $CI_PIPELINE_SOURCE != "merge_request_event"
+      when: never
+    - when: always
+
+variables:
+  IMAGE_NAME: $CI_REGISTRY_IMAGE
+  IMAGE_TAG: "1.2"
+  DEV_SERVER: "3.86.212.191"
+  DEV_ENDPOINT: http://ec2-3-86-212-191.compute-1.amazonaws.com:3000
+  PREPROD_SERVER: "54.87.169.215"
+  PREPROD_ENDPOINT: http://ec2-54-87-169-215.compute-1.amazonaws.com:3000
+  PROD_SERVER: "100.26.219.16"
+  PROD_ENDPOINT:  http://ec2-100-26-219-16.compute-1.amazonaws.com.com:3000
+
+stages:
+  - test
+  - build
+  - deploy_dev
+  - deploy_preprod
+  - deploy_prod
+  
+run_unit_tests:
+  image: node:17-alpine3.14
+  stage: test
+  cache:
+    key: $CI_COMMIT_REF_NAME
+    paths:
+      - app/node_modules
+  tags:
+    - docker
+    - local
+  before_script:
+    - cd app
+    - npm install
+  script:
+     - npm test
+  artifacts:
+    when: always
+    paths:
+       - app/junit.xml
+    reports:
+      junit: app/junit.xml
+
+sast:
+  stage: test
+
+build_image:
+  stage: build
+  tags:
+    - own
+    - ubuntu
+    - vm
+  script:
+    - docker build -t $IMAGE_NAME:$IMAGE_TAG .
+  
+push_image:
+  stage: build
+  needs:
+    - build_image
+  tags:
+    - own
+    - ubuntu
+    - vm
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY  
+  script:
+    - docker push $IMAGE_NAME:$IMAGE_TAG 
+
+deploy_to_dev:
+  stage: deploy_dev
+  tags: 
+    - ubuntu
+    - vm
+  before_script: 
+    - chmod 400 $SSH_PRIVATE_KEY
+  script:
+    - scp -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ./docker-compose.yaml ubuntu@$DEV_SERVER:/home/ubuntu
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ubuntu@$DEV_SERVER "
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker-compose down &&
+        docker-compose up -d"
+  environment:
+    name: Development
+    url: $DEV_ENDPOINT
+  
+functional_test:
+  stage: deploy_dev
+  needs:
+    - deploy_to_dev
+  script:
+    - echo "This is to run functional testing for promoting to Staging."
+
+deploy_to_preprod:
+  stage: deploy_preprod
+  tags: 
+    - ubuntu
+    - vm
+  before_script: 
+    - chmod 400 $SSH_PRIVATE_KEY
+  script:
+    - scp -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ./docker-compose.yaml ubuntu@$PREPROD_SERVER:/home/ubuntu
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ubuntu@$PREPROD_SERVER "
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker-compose down &&
+        docker-compose up -d"
+  environment:
+    name: PreProdcution
+    url: $PREPROD_ENDPOINT
+
+deploy_to_prod:
+  stage: deploy_prod
+  tags: 
+    - ubuntu
+    - vm
+  before_script: 
+    - chmod 400 $SSH_PRIVATE_KEY
+  script:
+    - scp -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ./docker-compose.yaml ubuntu@$PROD_SERVER:/home/ubuntu
+    - ssh -o StrictHostKeyChecking=no -i $SSH_PRIVATE_KEY ubuntu@$PROD_SERVER "
+        docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY &&
+        docker-compose down &&
+        docker-compose up -d"
+  environment:
+    name: Prodcution
+    url: $PROD_ENDPOINT
+

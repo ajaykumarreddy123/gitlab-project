@@ -1,0 +1,6 @@
+version: "3.3"
+services:
+  app:
+    image: registry.gitlab.com/teluguitfactory/nodejs-cicd:1.2
+    ports:
+      - 3000:3000
